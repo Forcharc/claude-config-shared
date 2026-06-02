@@ -12,7 +12,7 @@ settings example.
 ### Fresh install
 
 ```bash
-git clone git@github.com:<your-username>/claude-config-shared.git ~/.claude
+git clone git@github.com:Forcharc/claude-config-shared.git ~/.claude
 ```
 
 ### Existing ~/.claude
@@ -21,7 +21,7 @@ If `~/.claude` already exists (Claude Code creates it on first run):
 
 ```bash
 mv ~/.claude ~/.claude-backup
-git clone git@github.com:<your-username>/claude-config-shared.git ~/.claude
+git clone git@github.com:Forcharc/claude-config-shared.git ~/.claude
 # copy your local files back
 cp ~/.claude-backup/settings.local.json ~/.claude/ 2>/dev/null
 cp ~/.claude-backup/history.jsonl ~/.claude/ 2>/dev/null
