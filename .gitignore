@@ -1,0 +1,27 @@
+# Локальные настройки (per-machine) — не коммитить
+settings.json
+settings.local.json
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Claude Code runtime (на случай если репо клонируют в ~/.claude)
+projects/
+sessions/
+session-env/
+shell-snapshots/
+statsig/
+telemetry/
+todos/
+tasks/
+usage-data/
+cache/
+backups/
+file-history/
+paste-cache/
+plans/
+plugins/
+worktrees/
+history.jsonl
+.DS_Store
