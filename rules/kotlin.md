@@ -34,7 +34,7 @@ paths:
 - **Пропущенный cancellation:** долгие операции без isActive/ensureActive проверок
 - **Неправильный dispatcher:** CPU-работа на Dispatchers.IO, IO-работа на Main
 - **Проглоченный CancellationException:** в suspend-коде / внутри `launch { ... }` нельзя ловить `CancellationException` в `catch (e: Exception)` без перебрасывания. Варианты:
-  1. Использовать `launchSafely { ... }` из `ui-common:com.example.ui.common.coroutines` — он пробрасывает отмену автоматически.
+  1. Обернуть `launch` в хелпер, который явно пробрасывает CancellationException (он не должен попасть в общий catch(e: Exception)). Паттерн: создать launchSafely в shared-модуле с re-throw отмены.
   2. Явный `catch (e: CancellationException) { throw e }` перед `catch (e: Exception)`.
   3. `coroutineContext.ensureActive()` перед обработкой ошибки.
   Причина: проглоченная отмена ломает structured concurrency и показывает «CancellationException» в UI при штатном reconnect.
