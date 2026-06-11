@@ -1,73 +1,94 @@
 ---
 name: review
-description: "Code review via parallel agents (logic, clean-code, efficiency, architecture, security, docs) — orchestrated by review-orchestrator"
+description: "Code review: параллельные ревьюеры → review-judge → implementer-фиксы → re-review до clean. Цикл крутит главный оркестратор."
 ---
 
 # Code Review
 
 **Обязателен после КАЖДОГО коммита, без исключений.** Даже для .md, конфигов, документации. Это исключение из общего правила «не делегировать тривиальное» — ревью работает на всё, что попало в git.
 
-## Механика
+Цикл крутишь ты (main): сабагенты не могут спавнить сабагентов, поэтому оркестратора-посредника нет. Твоя работа — перекидывать пути файлов между агентами; содержимое находок не читай, думает review-judge.
 
-Один вызов — вся работа внутри агента `review-orchestrator`:
+## Вход
 
-```
-Agent(review-orchestrator, prompt="head=HEAD repo=<абс-путь-cwd> sessionId=<UUID>. <короткий контекст задачи>")
-```
+- **repo** — абсолютный путь к git-репо (в worktree / для `~/.claude/` — обязательно явный).
+- **head** — ref (default `HEAD`).
+- **mode** — `full` (default) | `analysis-only` (чужой код, например `/review-mr`: без правок, DEBT и коммитов).
+- **plan** (опционально) — абсолютный путь к плану, если реализация шла по плану; **plan_scope** — какой шаг плана реализует коммит (`C1`, `C2`, ... или `whole`, default `whole`). Передавай всегда, когда план есть.
+- **Контекст задачи** — 1-2 строки для ревьюеров и judge.
 
-**sessionId** — UUID текущей сессии вызывающего. Получить через ancestor процесса (надёжно в форках и после compaction — `ls -t *.jsonl` для этого не годится):
+## Шаг 0: Зафиксировать коммит и сессию
+
 ```bash
-pid=$$
-while [ "$pid" != "1" ] && [ -n "$pid" ]; do
-  cmd=$(ps -p "$pid" -o command= 2>/dev/null)
-  if echo "$cmd" | grep -qE -- '--resume [a-f0-9-]+'; then
-    echo "$cmd" | grep -oE -- '--resume [a-f0-9-]+' | awk '{print $2}'
-    break
-  fi
-  pid=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')
-done
-```
-Передаётся чтобы DEBT-записи ссылались на сессию пользователя, а не на сессию sub-agent'а.
-
-Агент сам:
-1. Снимет diff и классифицирует коммит (языки, масштаб, файлы)
-2. Параллельно спавнит `logic-reviewer` / `clean-code-reviewer` / `docs-reviewer` / `efficiency-reviewer` / `architecture-reviewer` / `security-reviewer` по правилам выбора
-3. Верифицирует и дедуплицирует находки
-4. FIX — закрывает через `implementer` агентов (параллельно где независимо), коммитит fix-коммит
-5. DEBT — записывает в `docs/tech-debt/` (или `memory/tech-debt/` если `techdebt_location: local`)
-6. Re-review на новый HEAD до сходимости
-7. Возвращает короткий финальный отчёт (раундов, коммитов, FIX/DEBT/false-positives, статус clean/blocked)
-
-## Что передать в промт
-
-- **head** — по умолчанию `HEAD`; для ранее запушенных коммитов — конкретный ref
-- **repo** — абсолютный путь к git-репо. Для текущего cwd — можно опустить, но в worktree / для `~/.claude/` всегда передавай явно
-- **sessionId** — UUID текущей сессии (обязателен). Без него DEBT-записи получат UUID sub-agent'а и `/finalize` их не найдёт
-- **Контекст задачи** — 1-2 строки: что за коммит, при какой задаче сделан. Нужен агенту для оценки релевантности находок
-- **mode** (опционально) — `full` (default; FIX правятся через implementer'ов и коммитятся) или `analysis-only` (FIX только в отчёт, без правок и коммитов). Используй `analysis-only` когда ревьюишь чужой код (например, при `/review-mr`)
-
-Примеры промта:
-```
-# Обычный коммит (full mode — default)
-head=HEAD repo=/Users/foo/.claude sessionId=a1b2c3d4-e5f6-7890-abcd-ef1234567890
-Коммит закрывает td-005: добавил предупреждение про sensitive-check в /techdebt и /techdebt-init скиллы.
-```
-```
-# Ревью чужого МР (analysis-only — без правок и коммитов)
-head=HEAD repo=/Users/foo/project mode=analysis-only sessionId=a1b2c3d4-e5f6-7890-abcd-ef1234567890
-МР #42: рефакторинг auth модуля. Ревьюем чужой код, правки не делаем.
+SHA=$(git -C <repo> rev-parse <head>)   # дальше везде $SHA, не HEAD
+OUT=<repo>/.tmp/review/${SHA:0:7} && mkdir -p $OUT
 ```
 
-## После возврата
+`sessionId` пересчитай через ancestor процесса (нужен judge для DEBT): `bash ~/.claude/skills/techdebt/session-id.sh`.
 
-- Если `clean` → управление возвращается в вызвавший флоу (обычно `/commit` — он делает push)
-- Если `blocked` → прочитай причину в отчёте агента, реши вручную
+## Шаг 1: Выбрать ревьюеров
 
-## Параллелизм с другими задачами
+Посмотри `git -C <repo> show $SHA --stat` и классифицируй diff:
 
-Пока review-orchestrator работает, можешь параллельно делать независимые операции (например, планировать следующий шаг). Но не стартуй ещё один коммит в тот же репо — review в процессе может делать fix-коммиты.
+- **logic-reviewer, clean-code-reviewer, docs-reviewer** — всегда.
+- **efficiency-reviewer** — всегда, КРОМЕ diff без единой строки с runtime-эффектом (чистые .md, комментарии). SQL-миграции, runtime-конфиги, build-скрипты — запускать. Сомневаешься — запускай.
+- **architecture-reviewer** — если 3+ файла, новые классы/интерфейсы или изменён публичный API.
+- **security-reviewer** — если diff задевает auth, network, crypto, storage, логирование чувствительного, deeplinks, WebView, IPC, сериализацию извне (пути `*/auth/*`, `*/crypto/*`, `*/network/*` и т.п., или слова `Token`, `Password`, `Cipher`, `Bearer`, `Authorization`, `WebView`, `Intent`, `SharedPreferences`, `http://`). Сомневаешься — запускай: false positive дешевле пропущенной уязвимости.
+- **plan-compliance-reviewer** — если передан `plan=` **и это раунд 0** (первое ревью коммита). При re-review fix-коммитов не запускать: fix-diff реализует правки по verdict, а не шаг плана, и план-compliance выдаст ложные MISSING/EXTRA. Ему в промт: `plan=<путь>`, `plan_scope=<шаг>`, `repo=<repo>`, `head=$SHA` — полный контракт его «Входа» (сверит diff с обязательствами шага: MISSING/EXTRA/DEVIATION).
+
+## Шаг 2: Спавнить ревьюеров параллельно
+
+Все выбранные — **Agent tool calls в ОДНОМ сообщении**. Каждому в промте:
+
+- «Ревью в репо `<repo>`. Используй `git -C <repo> show $SHA` для получения diff.»
+- Контекст задачи.
+- `out=$OUT/<имя-ревьюера>.md` — находки в файл, в reply только путь.
+
+## Шаг 3: Спавнить review-judge
+
+Один Agent call после возврата всех ревьюеров:
+
+```
+Agent(review-judge, prompt="repo=<repo> sha=$SHA out=$OUT sessionId=<UUID> mode=<mode>
+findings=<пути только реально запущенных ревьюеров через запятую>
+<контекст задачи>")
+```
+
+В `findings=` передавай **только** пути ревьюеров, реально запущенных на шаге 2. Условные ревьюеры (architecture/security/efficiency/plan-compliance), которые не запускались, — не включай: их файлов не существует, judge вернёт ошибку. Если запускался plan-compliance-reviewer — включи его путь в findings= наравне с остальными.
+
+Judge верифицирует находки по коду, классифицирует FIX/DEBT/DROP, записывает DEBT-записи, пишет `$OUT/verdict.md` и возвращает короткий статус.
+
+## Шаг 4: Развилка по статусу judge
+
+- **`clean`** → ревью завершено, верни управление вызвавшему флоу (обычно `/commit`).
+- **`fix-needed` + `mode=analysis-only`** → фиксы не делаются: прочитай verdict и отдай FIX-рекомендации вызвавшему флоу. Конец.
+- **`fix-needed` + `mode=full`** → шаг 5.
+
+## Шаг 5: Фиксы и fix-коммит
+
+1. **Implementer'ы**: по одному Agent call на FIX-группу из verdict, **параллельно в одном сообщении**. Промт: «Прочитай `$OUT/verdict.md`, выполни Группу N. Не коммить — только правки в working tree. Репо: `<repo>`.»
+2. Проверь `git -C <repo> status` и `diff` — правки в границах групп, чужого не задето.
+3. Fix-коммит сама (это исключение из «всегда /commit» — ты внутри его реализации):
+   ```bash
+   cd <repo> && git add <только релевантные файлы> && git commit -m "<title>"
+   ```
+   Title — английский, imperative, ≤50 символов, по содержимому (не «Fix review:»); body с «почему», если нетривиально; маскировка символов как в `/commit`. После коммита — подпись по канонике `/commit` секция «Подпись коммита» (sessionId уже вычислен в шаге 0; trailer — только при opt-in проектного CLAUDE.md).
+
+## Шаг 6: Re-review
+
+После fix-коммита — новый раунд с шага 0 (новый `$SHA`, новая папка `$OUT`). Ревьюеры увидят только diff fix-коммита.
+
+**Максимум 3 fix-коммита.** Первое ревью — «раунд 0». Если после третьего fix-коммита judge всё ещё возвращает fix-needed — останови цикл, доложи пользователю `blocked` с причиной.
+
+## Итог
+
+В вызывающий флоу верни сводку: раундов, fix-коммиты (хэши), FIX закрыто, DEBT (td-NNN), DROP/false positives, статус clean|blocked. В свой контекст не тащи содержимое находок — только статусы judge.
 
 ## Когда НЕ вызывать
 
-- Если коммита ещё нет (working tree грязное) — сначала `/commit`
-- Для черновиков вне git — ревью не применимо
+- Коммита ещё нет (working tree грязное) — сначала `/commit`.
+- Черновики вне git — ревью не применимо.
+
+## Параллелизм с другими задачами
+
+Пока ревьюеры/judge работают, не стартуй другой коммит в тот же репо — цикл делает fix-коммиты.

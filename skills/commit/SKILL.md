@@ -1,6 +1,6 @@
 ---
 name: commit
-description: "Git commit: stage, review, format message, push"
+description: "Git commit: stage, review, format message; push только при явном opt-in проекта"
 ---
 
 # Git Commit
@@ -21,25 +21,18 @@ description: "Git commit: stage, review, format message, push"
    - Без тикетов → `Краткое описание` (на языке истории коммитов)
 
 5. Сгенерируй commit message:
+   - **Вычисли sessionId сейчас** (он нужен и для trailer ниже, и для журнала в шаге 6) — алгоритм ps-ancestor (session-id.sh):
+      ```bash
+      bash ~/.claude/skills/techdebt/session-id.sh
+      ```
    - **Title** (до 50 символов): что сделано. На английском — imperative mood ("Add", не "Added").
    - **Body** (опционально): ПОЧЕМУ сделано, какую проблему решает, контекст. Не пересказывай diff. Для тривиальных изменений body не нужен.
+   - **Trailer-подпись (только личные репо, opt-in):** если проектный CLAUDE.md явно разрешает trailer-подпись (формулировка вроде «commit signature trailer: разрешён»), добавь в конец body пустую строку и trailer `Ref: <sessionId>` (sessionId вычислен выше). Без явного разрешения — НЕ добавляй ничего в message (корпоративный дефолт, не палиться).
    - **Маскировка символов** — применяй группу α из `/remind-text-style` к title и body: никаких backticks вокруг имён функций/файлов (пиши `handleAuth()` как handleAuth()), никакого длинного тире (— → -), никаких умных кавычек, никаких →. Стиль body — свободный (можно подробно объяснять "почему"), правила «короче, без преамбул» к коммитам не применяются.
 
-6. Выполни коммит. Покажи хэш и title.
+6. Выполни коммит. Покажи хэш и title. Сразу после — запиши подпись в журнал (см. секцию «Подпись коммита» внизу), используя sessionId, вычисленный в шаге 5.
 
-7. **Ревью:** вычисли sessionId через ancestor процесса (надёжно в форках и после compaction - `ls -t *.jsonl` для этого не годится):
-   ```bash
-   pid=$$
-   while [ "$pid" != "1" ] && [ -n "$pid" ]; do
-     cmd=$(ps -p "$pid" -o command= 2>/dev/null)
-     if echo "$cmd" | grep -qE -- '--resume [a-f0-9-]+'; then
-       echo "$cmd" | grep -oE -- '--resume [a-f0-9-]+' | awk '{print $2}'
-       break
-     fi
-     pid=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')
-   done
-   ```
-   Запусти `/review` на свежий HEAD, передав `sessionId=<UUID>` в промт review-orchestrator. Фиксы становятся отдельными коммитами, после каждого - новый `/review` на новом HEAD (тот же sessionId). Цикл сходится когда ревью не находит FIX (только DEBT или clean).
+7. **Ревью:** используй sessionId, вычисленный в шаге 5. Запусти цикл `/review` на свежий HEAD (`sessionId=<UUID>` понадобится review-judge для DEBT-записей). Механика — в самом скилле: ревьюеры параллельно → review-judge → implementer-фиксы → fix-коммит → re-review до clean, максимум 3 fix-коммита. При `blocked` — реши вручную.
 
 8. **Push:**
    - Определи, в worktree ли мы: `git rev-parse --absolute-git-dir`, case-match на `*/.git/worktrees/*`. Если матч — мы в worktree.
@@ -59,3 +52,18 @@ description: "Git commit: stage, review, format message, push"
   - `/commit fix auth bug` — title: "Fix auth bug"
   - `/commit PROJ-12345` — тикет PROJ-12345, title автоматический
   - `/commit PROJ-12345 fix auth` — тикет PROJ-12345, title: "Fix auth"
+
+## Подпись коммита (каноника; /review и /finalize ссылаются сюда)
+
+Каждый созданный коммит привязывается к сессии — чтобы по коммиту найти сессию и вернуться в неё через claude --resume <UUID>.
+
+1. **sessionId** — вычисли через ancestor процесса: `bash ~/.claude/skills/techdebt/session-id.sh`. Если алгоритм вернул пусто (сессия без --resume) — найди файл сессии грепом **уникальной строки текущего диалога** по `~/.claude/projects/<slug-от-cwd-сессии>/*.jsonl` (`grep -l '<строка>' ...`); UUID = basename найденного файла без `.jsonl`. НЕ используй `ls -t` - в форках он возвращает файл родительской сессии, а не текущей. Если и греп не дал ровно один файл — пиши `unknown`, не блокируй коммит.
+2. **Журнал** (всегда, в любом репо): допиши строку в `~/.claude/projects/<slug>/memory/commit-sessions.md`:
+   ```
+   <short-hash>  <sessionId>  <YYYY-MM-DD>  <title коммита>
+   ```
+   `<slug>` считается по **main-репо** (не worktree): `PROJECT_ROOT=$(dirname "$(git rev-parse --git-common-dir)")`, затем `printf '%s' "$PROJECT_ROOT" | sed 's|[/.]|-|g'`. `mkdir -p` директории. Пишется через Bash (echo >>), не через Write — путь под `~/.claude/`.
+3. **Trailer** (`Ref: <sessionId>` в message) — только при явном opt-in в проектном CLAUDE.md, см. шаг 5. Дефолт — без trailer: в корпоративных репо подпись живёт только в локальном журнале.
+
+Найти сессию по коммиту: `grep <short-hash> ~/.claude/projects/*/memory/commit-sessions.md` → `claude --resume <UUID>`. После rebase/amend хэш меняется — новая строка пишется при новом коммите, старая остаётся как история.
+

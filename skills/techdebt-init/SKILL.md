@@ -7,7 +7,7 @@ description: "Initialize tech debt directory structure"
 
 ## Шаг 0: Определить путь хранения
 
-Алгоритм определения базового пути (с учётом `techdebt_location` и sensitive-check в `~/.claude/`) — см. канонический источник: **`~/.claude/skills/techdebt/SKILL.md` шаг 0**. Используй тот же путь здесь.
+Алгоритм определения базового пути (с учётом `techdebt_location` и особого случая `~/.claude/`) — см. канонический источник: **`~/.claude/skills/techdebt/SKILL.md` шаг 0**. Используй тот же путь здесь.
 
 ## Создать структуру
 
@@ -36,7 +36,7 @@ priority: "🔴|🟠|🟡|🟢"
 found: YYYY-MM-DD
 task: "контекст задачи, при которой нашли"
 status: open
-originSessionId: "UUID текущей Claude Code сессии (см. /techdebt шаг 3)"
+originSessionId: "UUID текущей Claude Code сессии (bash ~/.claude/skills/techdebt/session-id.sh)"
 ---
 
 ## Проблема
