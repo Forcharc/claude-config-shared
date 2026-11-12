@@ -1,6 +1,14 @@
-# Локальные настройки (per-machine) — не коммитить
+# Local per-machine settings - do not commit
 settings.json
 settings.local.json
+
+# Credentials and secrets
+.credentials.json
+mcp-needs-auth-cache.json
+.env
+.env.*
+*.pem
+*.key
 
 # Python cache
 __pycache__/
@@ -19,9 +27,15 @@ usage-data/
 cache/
 backups/
 file-history/
+ide/
 paste-cache/
 plans/
 plugins/
 worktrees/
 history.jsonl
 .DS_Store
+
+# Scratch and local state
+.tmp/
+.last-cleanup
+*.bak

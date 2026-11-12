@@ -8,7 +8,7 @@ skills: [agent-core-preamble, reviewer-findings-output]
 
 Ты — ревьювер безопасности. Твоя задача — найти проблемы безопасности с точки зрения **attacker mindset** («как это можно эксплуатировать»), НЕ исправлять их. Верни список найденных проблем.
 
-Спавнится главной сессией (цикл /review) **условно**: только когда в diff есть код, потенциально связанный с auth, network, crypto, storage, logging чувствительной информации, deeplinks, WebView, IPC (Intent'ы, exported components), сериализацией от внешнего источника. Условие выбора — в /review шаг 1; если тебя запустили — твоя экспертиза релевантна.
+Спавнится review-runner'ом (цикл /review) **условно**: только когда в diff есть код, потенциально связанный с auth, network, crypto, storage, logging чувствительной информации, deeplinks, WebView, IPC (Intent'ы, exported components), сериализацией от внешнего источника. Условие выбора — в agents/review-runner.md, шаг 1; если тебя запустили — твоя экспертиза релевантна.
 
 ## Rules: специфика твоей зоны
 
@@ -24,7 +24,7 @@ skills: [agent-core-preamble, reviewer-findings-output]
 
 ### Secrets / credentials в коде
 - Хардкоженные API-ключи, токены, пароли, секреты подписи
-- Строки вида `"sk_live_..."`, `"-----BEGIN PRIVATE KEY-----"`, `Bearer <token>`
+- Строки вида `"sk_live_..."`, `"<PEM-заголовок приватного ключа>"`, `Bearer <token>`
 - Креды в комментариях, в тестовых фикстурах, в .properties/.env-файлах попавших в diff
 - Эмулятор/девелоп-токены, которые не должны утечь в production-сборку
 

@@ -4,29 +4,19 @@
   "includeGitInstructions": false,
   "permissions": {
     "allow": [
-      "Bash(adb:*)",
-      "Bash(git:*)",
-      "Bash(bash:*)",
-      "Bash(bash -c:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
       "Bash(ls:*)",
-      "Bash(find:*)",
       "Bash(grep:*)",
       "Bash(mkdir:*)",
-      "Bash(rm:*)",
-      "Bash(rmdir:*)",
-      "Bash(echo:*)",
       "Bash(sort:*)",
       "Bash(wc:*)",
-      "Bash(chmod:*)",
       "Bash(jq:*)",
-      "Bash(python3:*)",
-      "Bash(open:*)",
-      "Bash(curl:*)",
       "WebSearch",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:stackoverflow.com)",
-      "WebFetch(domain:gist.github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:stackoverflow.com)"
     ],
     "deny": [],
     "defaultMode": "default"
@@ -41,6 +31,15 @@
             "command": "~/.claude/hooks/worktree-boundary.sh"
           }
         ]
+      },
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/git-branch-guard.py"
+          }
+        ]
       }
     ]
   },
@@ -48,10 +47,5 @@
     "type": "command",
     "command": "~/.claude/statusline.sh",
     "padding": 0
-  },
-  "feedbackSurveyRate": 0,
-  "effortLevel": "high",
-  "autoUpdatesChannel": "latest",
-  "theme": "auto",
-  "editorMode": "vim"
+  }
 }

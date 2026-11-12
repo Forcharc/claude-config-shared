@@ -1,13 +1,13 @@
 ---
 id: td-NNN
 title: Краткое описание проблемы
-module: agents|skills|rules|hooks|infra
+module: agents|skills|rules|hooks|infra|docs
 tags: [duplication|performance|reliability|security|design|cleanup|testing]
 priority: "🔴|🟠|🟡|🟢"
 found: YYYY-MM-DD
 task: "контекст задачи, при которой нашли"
 status: open
-originSessionId: "UUID текущей Claude Code сессии (см. /techdebt шаг 3)"
+originSessionId: "UUID текущей Claude Code сессии (значение $CLAUDE_CODE_SESSION_ID)"
 ---
 
 ## Проблема

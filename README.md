@@ -1,323 +1,187 @@
-# Claude Code Configuration
+# Claude Code Harness
 
-A shareable [Claude Code](https://claude.ai/code) setup: slash-command skills,
-custom review agents, path-scoped rules, a worktree-safety hook, and a sanitized
-settings example.
+A shareable [Claude Code](https://claude.ai/code) setup: an orchestrator workflow
+that delegates work to sub-agents, with a code review loop at its center. It
+contains agents, skills (slash commands), rules, safety hooks, a status line and a
+sanitized settings example.
 
-> Note: `CLAUDE.md` and most skills are written in Russian (the author's working
-> language). The logic is language-agnostic; translate the prompts if you prefer.
+> Note: `CLAUDE.md`, the rules, the agents and the skills are written in Russian
+> (the author's working language). The logic does not depend on the language;
+> translate the prompts if you prefer.
 
-## Setup
+## What it is
 
-### Fresh install
+- The main session acts as an orchestrator: it classifies a task, researches,
+  plans, delegates implementation and review to agents, and checks the result.
+- Agents are narrow roles (researcher, planner, implementer, several reviewers, a
+  judge). They exchange data through files, not through the orchestrator's context.
+- Every commit goes through a review loop (`/review`) until it comes back clean.
+- Edits to tracked files happen in git worktrees; hooks enforce that.
+
+## Quick start
+
+If `~/.claude` does not exist yet, just clone and create settings:
 
 ```bash
-# Clone
-git clone git@github.com:Forcharc/claude-config.git ~/.claude
+git clone https://github.com/Forcharc/claude-config-shared.git ~/.claude
+cp ~/.claude/settings.example.json ~/.claude/settings.json   # then edit it
 ```
 
-### Existing ~/.claude
+If `~/.claude` already exists (Claude Code creates it on first run), move it aside first.
 
-If `~/.claude` already exists (Claude Code creates it on first run):
+Moving `~/.claude` also moves your credentials, sessions and `projects/` into the
+backup: you will have to log in again, and the old session history stays in the
+backup directory.
 
 ```bash
-# Backup and remove
 mv ~/.claude ~/.claude-backup
+git clone https://github.com/Forcharc/claude-config-shared.git ~/.claude
 
-# Clone
-git clone git@github.com:Forcharc/claude-config.git ~/.claude
-
-# Copy runtime files back (sessions, cache, etc.)
+# Copy your own settings and history back
+cp ~/.claude-backup/settings.json ~/.claude/ 2>/dev/null
 cp ~/.claude-backup/settings.local.json ~/.claude/ 2>/dev/null
 cp ~/.claude-backup/history.jsonl ~/.claude/ 2>/dev/null
-
-# Clean up
-rm -rf ~/.claude-backup
+[ -f ~/.claude/settings.json ] || cp ~/.claude/settings.example.json ~/.claude/settings.json
 ```
 
-### After setup
+Restart Claude Code afterwards and edit `settings.json` to fit your setup.
 
-Restart Claude Code to pick up changes.
+## Review loop
 
----
-
-## Structure
+`/review` is the main entry point. It starts the `review-runner` agent, which drives
+the whole loop:
 
 ```
-~/.claude/
-├── CLAUDE.md              # Global rules (loaded natively by Claude Code)
-├── settings.example.json  # Settings template (copy to settings.json and edit)
-├── skills/                # Skills (slash commands)
-│   ├── commit/SKILL.md
-│   ├── review/SKILL.md
-│   ├── review-mr/SKILL.md
-│   ├── rethink/SKILL.md
-│   ├── finalize/SKILL.md
-│   ├── fork-init/SKILL.md
-│   ├── where/SKILL.md
-│   ├── techdebt/SKILL.md          # auto-invoke
-│   ├── techdebt-init/SKILL.md
-│   ├── gist/SKILL.md              # + gist-edit.md, gist-list.md
-│   ├── todo/SKILL.md              # + todo-add/delete/done/list.md
-│   ├── txt/SKILL.md
-│   ├── rule/SKILL.md
-│   ├── remind-protocol/SKILL.md
-│   ├── remind-workflow/SKILL.md
-│   ├── remind-text-style/SKILL.md
-│   ├── workflow-guide/SKILL.md
-│   ├── tell-the-truth/SKILL.md
-│   ├── agent-core-preamble/SKILL.md   # internal library, not a slash command
-│   └── reviewer-findings-output/SKILL.md   # internal library, not a slash command
-├── hooks/
-│   └── worktree-boundary.sh       # PreToolUse safety hook: blocks writes outside worktree
-├── scripts/                       # Python backends for gist and todo skills
-│   ├── gist_create.py
-│   ├── gist_from_file.py
-│   ├── gist_list.py
-│   ├── gist_update.py
-│   ├── gist_view.py
-│   ├── todo_add.py
-│   ├── todo_api.py
-│   ├── todo_config.py
-│   ├── todo_delete.py
-│   ├── todo_done.py
-│   └── todo_list.py
-├── rules/                  # Rules: path-scoped (kotlin.md...) and always-loaded (protocol.md, workflow.md)
-│   ├── kotlin.md                      # path-scoped: *.kt, *.kts
-│   ├── check-dependency-versions.md   # path-scoped: build files (gradle, npm, cargo...)
-│   ├── protocol.md                    # always-loaded: communication protocol (canonical)
-│   └── workflow.md                    # always-loaded: orchestration workflow (canonical)
-└── agents/                 # Custom review agents
-    ├── logic-reviewer.md
-    ├── clean-code-reviewer.md
-    ├── docs-reviewer.md
-    ├── efficiency-reviewer.md
-    ├── architecture-reviewer.md
-    ├── security-reviewer.md
-    ├── plan-compliance-reviewer.md
-    ├── plan-factcheck-reviewer.md
-    ├── plan-standards-reviewer.md
-    ├── implementer.md
-    ├── planner.md
-    ├── research-writer.md
-    └── review-judge.md
+/review
+  -> review-runner
+       -> reviewers in parallel
+          (logic, security, clean-code, efficiency, architecture, docs,
+           plan-compliance, fresh-reader)
+       -> review-judge        verifies every finding against the code
+       -> implementer         fixes confirmed findings
+       -> fix commit
+       -> re-review, until the verdict is clean
 ```
 
----
+- `mode=full` (default): findings are fixed and committed.
+- `mode=analysis-only`: someone else's code, no edits, no commits; only a verdict.
+- `/review-mr` reviews a GitLab merge request through `glab`, using the same loop in
+  `analysis-only` mode.
 
-## Skills
-
-### `/commit` - Git Commit
-
-Automated commit workflow: stage, review, commit.
-
-- Stages all changed files (skips secrets)
-- Checks atomicity - splits unrelated changes into separate commits
-- Runs `/review` after every commit (no exceptions - docs, configs, and trivial changes too)
-- Generates commit message: title (imperative, <50 chars) + optional body (WHY, not WHAT)
-- Does NOT push by default; push requires explicit per-project opt-in in project CLAUDE.md (e.g. "auto-push after clean review")
-- Supports ticket prefixes: `/commit PROJ-12345 fix auth`
-
-### `/review` - Code Review
-
-Dispatches parallel review agents based on diff context:
-
-| Agent | When | What it checks |
-|-------|------|----------------|
-| logic-reviewer | Always | Null/branch handling, error handling, races, deleted side-effects, edge cases, redundant state, copy-paste with variations, API misuse |
-| clean-code-reviewer | Always | Dead code, speculative generality, over-explanatory comments, naming, magic numbers, parameter sprawl, DRY/reuse, project patterns |
-| docs-reviewer | Always | Missing docs for changed behavior, stale/contradicting docs & comments, procedural sync-rule violations (touch A -> update B) |
-| efficiency-reviewer | Logic/IO/algorithms in diff | N+1, missed concurrency, hot-path bloat, leaks, premature optimization without measurement |
-| architecture-reviewer | 3+ files or new classes/APIs | Layer violations, wrong dependencies, broken abstractions, public API surface, breaking changes without migration |
-| security-reviewer | Auth/network/crypto/storage/IPC code in diff | Secrets in code, sensitive logs, missing auth, TLS issues, crypto misuse, input validation, unsafe deserialization |
-| plan-compliance-reviewer | plan= passed | MISSING (claimed by plan, not done), EXTRA (out of scope), DEVIATION (done differently than prescribed) |
-
-After agents report findings, the main agent fixes real issues and skips false positives.
-
-### `/techdebt` - Record Tech Debt
-
-Records tech debt with auto-numbering and structured frontmatter (module, tags, priority). Storage location depends on `techdebt_location` setting in project CLAUDE.md:
-- `repo` (default) - `docs/tech-debt/` (committed to repository)
-- `local` - `.claude/projects/<project>/memory/tech-debt/` (local only, not in repo; nested in `memory/` so the worktree-boundary hook allows writes from worktrees)
-
-If the storage directory doesn't exist, calls `/techdebt-init` first.
-
-### `/techdebt-init` - Initialize Tech Debt Structure
-
-Creates tech debt directory with INDEX.md and TEMPLATE.md. Auto-detects project modules for INDEX sections. Respects `techdebt_location` setting.
-
-### `/rethink` - Self-Critique
-
-Forces the AI to critically re-evaluate its last proposal/plan/decision:
-- Attacks from 6 angles: complexity, completeness, correctness, necessity, alternatives, user context
-- No self-defense - pure critic mode
-- Speaks up if the user's approach seems questionable
-
-### `/gist` - Quick Notes
-
-Create and manage quick notes/gists.
-
-### `/todo` - Task Management
-
-Create and manage TODO lists.
-
-### `/txt` - Text File Output
-
-Output information to a text file.
-
-### `/rule` - Manage Rules
-
-Add/edit rules in ~/.claude/CLAUDE.md.
-
-### `/remind-protocol` - Communication Protocol
-
-Thin reminder: dynamically injects rules/protocol.md (the single source of the communication protocol) at invocation. No content copies.
-
-### `/remind-workflow` - Agent Orchestration
-
-Thin reminder: dynamically injects rules/workflow.md (the single source of the orchestration workflow) at invocation. No content copies.
-
-### `/remind-text-style` - Text Style Rules
-
-Thin reminder: injects text-masking and style rules at invocation. Two levels: symbol masking (applies everywhere - commits, docs, comments, PR replies) and style (concise, no preambles - applies only to short interactive texts like MR comments and colleague replies, not to docs or commit bodies).
-
-### `/workflow-guide` - Detailed Workflow Guide
-
-Extended guide with examples and step-by-step flow descriptions. Companion to rules/workflow.md (the canonical algorithm lives there; examples and details live here). Use when you need concrete examples of the review cycle, worktree workflow, or planning pipeline.
-
-### `/finalize` - End-of-session Cleanup
-
-Closes all tech debts created in the current session, processes flow-feedback journal entries, and resolves session threads. Runs implementer agents in parallel via worktrees. Intended to be called at the end of a feature branch or session.
-
-### `/fork-init` - Fork Session Setup
-
-Called immediately after forking a chat. Explains to Claude that it is a fork and sets up a new worktree so the fork does not interfere with the parent session.
-
-### `/where` - Restore Session Context
-
-Restores session context after switching away. Returns a one-message summary: current task, discussion highlights with quotes, what is done, what remains.
-
-### `/review-mr` - GitLab MR Review
-
-Full MR review flow via glab: fetches diff and discussion context, runs review agents, prepares comment drafts via /txt. The user publishes comments manually. Currently covers GitLab only (glab).
-
-### `/tell-the-truth` - Honest Self-Review
-
-Forces honest self-analysis of completed work: completeness, copy-paste, edge cases, tests, architecture. No sugarcoating.
-
----
-
-### agent-core-preamble - Internal Agent Preamble
-
-Not a slash command: a shared library injected into subagent context via the skills: frontmatter field of an agent definition. Carries the project-rules reading block and the flow-feedback block so they live in one place instead of 13 copies. Do not invoke directly.
-
-### reviewer-findings-output - Internal Reviewer Output Protocol
-
-Not a slash command: a shared library injected via the skills: frontmatter into the nine reviewer agents. Carries the out-file findings protocol (write findings to the out= path, reply with the path and a findings count). Do not invoke directly.
-
-## Rules
-
-Rules in `rules/`: path-scoped ones load when Claude works with matching files; protocol.md and workflow.md have no paths filter and load into every session.
-
-### kotlin.md
-
-Kotlin development rules: modern APIs (Coroutines over AsyncTask, Flow over LiveData), review checklist (Compose, Coroutines, idioms, Ktor). Loaded for `**/*.kt`, `**/*.kts`.
-
-### check-dependency-versions.md
-
-Enforces version checks via WebSearch when adding/updating dependencies. Loaded for build files: `libs.versions.toml`, `build.gradle*`, `package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, and more.
-
----
+Minimal set if you only want the review loop: all of `agents/`, and
+`skills/{review,agent-core-preamble,reviewer-findings-output,commit,techdebt,techdebt-init}`,
+plus `rules/workflow.md`, `rules/code-says-what-it-does.md` and `rules/repo-references.md`. These are the
+things the loop refers to: `/commit` (fix commits), `/techdebt` and `/techdebt-init`
+(the judge records confirmed debt), `/review-mr` (optional), and the three rule files
+(`workflow.md` is referenced by `/review` and `/commit`; `repo-references.md` is used by `docs-reviewer`).
 
 ## Agents
 
-Custom subagents in `agents/`. Used by `/review` but can also be invoked directly.
+All agents live in `agents/`. Most of them load the shared preambles
+`agent-core-preamble` and `reviewer-findings-output` through the `skills:` field of
+their frontmatter.
 
-### logic-reviewer
+| Agent | Role |
+|-------|------|
+| `review-runner` | Drives the review loop: picks reviewers, runs them, calls the judge, fixes, re-reviews |
+| `review-judge` | Verifies each reviewer finding against the code; confirms, defers as debt, or drops |
+| `logic-reviewer` | Bugs, edge cases, error handling, races |
+| `security-reviewer` | Secrets, sensitive data in logs, missing checks, unsafe input handling |
+| `clean-code-reviewer` | YAGNI, dead code, speculative abstractions, naming, duplication |
+| `efficiency-reviewer` | Redundant work, missed concurrency, leaks |
+| `architecture-reviewer` | Layering, dependencies, public API surface, breaking changes |
+| `docs-reviewer` | Docs that no longer match the code |
+| `plan-compliance-reviewer` | Compares a commit with the implementation plan |
+| `fresh-reader-reviewer` | Reads the final branch state without the plan and checks the shape of the code |
+| `plan-runner` | Drives plan creation and plan review |
+| `planner` | Writes a detailed implementation plan to a file |
+| `plan-factcheck-reviewer` | Checks the claims in a plan against the code |
+| `plan-standards-reviewer` | Checks a plan against project rules and established patterns |
+| `research-writer` | Researches the codebase and writes a report to a file |
+| `implementer` | Writes and edits code from a plan or task |
 
-Model: Sonnet. Tools: Read, Grep, Glob, Bash (read-only, no Edit/Write).
+## Skills
 
-Checks correctness and bug-prone code: null/branch/exception handling, race conditions, missing cancellation, resource leaks (un-closed), deleted side-effects, copy-paste with variations, redundant state, API misuse, edge cases. Mindset: "won't fix it - will eventually break".
+Skills live in `skills/<name>/SKILL.md`.
 
-### clean-code-reviewer
+| Skill | Purpose |
+|-------|---------|
+| `/review` | Starts the review loop |
+| `/review-mr` | Reviews a GitLab merge request through `glab` |
+| `/commit` | Stages, reviews and formats a commit; pushes only if the project opts in |
+| `/techdebt` | Records a tech debt item with an automatic number |
+| `/techdebt-init` | Creates the tech debt directory structure |
+| `/finalize` | Closes the session's tech debt, processes flow feedback and deferred threads |
+| `/fork-init` | Sets up a forked chat session with its own worktree |
+| `/txt` | Writes information to a text file and opens it for copying |
+| `agent-core-preamble` | Library for sub-agents: rules check, worktree check, flow feedback (loaded by agents, not called directly) |
+| `reviewer-findings-output` | Library for reviewers: how to write the findings file (loaded by reviewers, not called directly) |
 
-Model: Sonnet. Tools: Read, Grep, Glob, Bash.
+## Rules
 
-Checks readability and YAGNI: dead code, speculative generality (with test-seam exceptions), speculative/over-explanatory comments, naming, magic numbers, parameter sprawl, function/class size, copy-paste without variations (DRY), reuse violations, project pattern consistency. Mindset: "remove the problem - code works the same, just cleaner".
+Rules are in `rules/`. The first three apply to every session; the last two are
+scoped by `paths:` in their frontmatter.
 
-### docs-reviewer
+| File | Content |
+|------|---------|
+| `workflow.md` | Orchestration through sub-agents, worktree isolation, delegation reference |
+| `protocol.md` | Communication protocol: numbered questions, options with a recommended one |
+| `repo-references.md` | What may and may not be referenced from texts committed to a repository |
+| `code-says-what-it-does.md` | Code shape must match production behavior; no test-only members |
+| `check-dependency-versions.md` | Check the current version before adding or bumping a dependency |
 
-Model: Sonnet. Tools: Read, Grep, Glob, Bash.
+## Hooks and status line
 
-Checks code↔docs sync: missing docs for changed behavior (new module/command/env-var/API not reflected in CLAUDE.md, README, docs, KDoc), stale docs and comments that contradict the code after a change, and violations of procedural sync rules ("touch A -> update B"). Covers any `.md` and any comment/KDoc; subject-matter rule violations stay with the profile reviewer. Mindset: "the text about the code drifted from the code".
+| File | Purpose |
+|------|---------|
+| `hooks/worktree-boundary.sh` | `PreToolUse` on Write/Edit/MultiEdit/NotebookEdit: refuses writes into the main working tree of a git repository (git-ignored files and live merge conflicts excepted) |
+| `hooks/git-branch-guard.py` | `PreToolUse` on Bash: refuses `git checkout`, `switch`, `reset --hard` and `branch -f` in the main working tree |
+| `hooks/*.test.sh` | Test scripts for the two hooks |
+| `statusline.sh` | One-line status line: folder, model, context, monthly cost |
 
-### efficiency-reviewer
+## Requirements
 
-Model: Sonnet. Tools: Read, Grep, Glob, Bash.
+- Claude Code
+- git and bash
+- `python3` (the `git-branch-guard.py` hook)
+- `jq` (`statusline.sh`, `skills/review/runner-wait.sh` - exits with an error without it; `worktree-boundary.sh` skips its checks without it)
+- `glab`, configured for your GitLab instance (only for `/review-mr`)
+- `ccusage`, run through `npx` (only for the monthly cost in the status line)
+- macOS: `statusline.sh` calls `stat -f`, the BSD form. On Linux, change those calls
+  to `stat -c`.
 
-Checks for redundant computations, missed concurrency, hot-path bloat, unbounded data structures, resource leaks, and premature optimization without measurement.
+## Files created at runtime
 
-### architecture-reviewer
+The harness writes these itself; they are not part of the repository.
 
-Model: Sonnet. Tools: Read, Grep, Glob, Bash.
+- `projects/<slug>/memory/agent-results/` - reports exchanged between agents
+- `projects/<slug>/memory/flow-feedback.md` - problems agents hit in the process itself
+- `projects/<slug>/memory/commit-sessions.md` - which session made which commit
+- `projects/<slug>/memory/session-threads.md` - ideas and questions deferred during a session
+- `.tmp/` in your working repositories - scratch files and logs
 
-Checks layer violations, dependency direction, broken abstractions, misplaced classes, public API surface expansion, and breaking changes without migration plan.
+`<slug>` is the absolute path of `~/.claude` with every `/` and `.` replaced by `-`.
 
-### security-reviewer
+## Settings example
 
-Model: Sonnet. Tools: Read, Grep, Glob, Bash. Conditional trigger: orchestrator runs it when diff touches auth, network, crypto, storage, logging, deeplinks, WebView, or IPC code.
+`settings.example.json` is a minimal starting point for `settings.json`:
 
-Checks for hardcoded secrets, sensitive data in logs, missing auth/authz checks, TLS/certificate issues, input validation gaps (SQL/path traversal/command injection), crypto misuse (weak algorithms, bad IV, ECB), unsafe deserialization, Android-specific issues (exported components, WebView JS bridges, unencrypted storage).
+- Two `PreToolUse` hooks: `worktree-boundary.sh` for file edits and
+  `git-branch-guard.py` for Bash. Together they keep tracked-file edits and branch
+  switches out of the main working tree.
+- `statusLine` points to `statusline.sh`.
+- `includeGitInstructions: false` drops Claude Code's built-in git instructions;
+  the git section of `CLAUDE.md` replaces them.
+- `defaultMode: default` keeps the normal permission prompts. The allow list is
+  short on purpose; add commands you trust. Only read-only git commands
+  (`status`, `diff`, `log`, `show`) are pre-approved; `push` and other git commands
+  that write still ask for confirmation. The form `git -C <path> ...` is not
+  covered by these rules and will ask too; add `Bash(git -C:*)` only on purpose,
+  because it also covers `push`.
 
-### plan-compliance-reviewer
+## Customizing
 
-Model: Sonnet. Tools: Read, Grep, Glob, Bash, Write. Conditional trigger: orchestrator runs it when plan= is passed (commit implements an approved plan).
-
-Checks that the commit matches the approved plan for the given scope (plan_scope=): reports MISSING when plan-required changes are absent from the diff, EXTRA when the diff contains changes outside the plan scope, and DEVIATION when something is done differently than the plan prescribed.
-
-### plan-factcheck-reviewer
-
-Model: Sonnet. Tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, Write. Used in the planning pipeline (parallel with plan-standards-reviewer after planner produces a plan).
-
-Checks every verifiable claim in the plan for correctness - code claims via Read/Grep, external facts via WebSearch/WebFetch. Finds hallucinations: wrong API signatures, non-existent methods, misread file paths, incorrect library behavior. Does not fix - only reports findings so planner can correct them.
-
-### plan-standards-reviewer
-
-Model: Sonnet. Tools: Read, Grep, Glob, Bash, Write. Used in the planning pipeline (parallel with plan-factcheck-reviewer after planner produces a plan).
-
-Checks that the plan follows project rules (rules/), established codebase patterns, and the solution the user approved. Reports violations of rules, architectural patterns, and deviations from the agreed-upon design decision. Does not fix - only reports findings so planner can correct them.
-
----
-
-## Global Settings (settings.example.json)
-
-### Post-commit hook
-
-After every `/commit`, a PostToolUse hook injects a reminder to record any tech debt discovered during work via `/techdebt`.
-
----
-
-## CLAUDE.md (Global Rules)
-
-Located at `~/.claude/CLAUDE.md` (loaded natively by Claude Code). Contains only what is unique to it: identity, user, text masking, git rules (always `/commit`, commit signatures, push policy), worktrees, tech debt, session threads, session id, technical tips. The full communication protocol and orchestration workflow live in rules/protocol.md and rules/workflow.md (always-loaded user-level rules).
-
----
-
-## Workflow
-
-```
-Work on code
-    │
-    ├─ Notice tech debt? → /techdebt (record it)
-    │
-    ├─ Done? → /commit
-    │           ├─ /review (agents check quality/efficiency/architecture)
-    │           ├─ Fix issues
-    │           ├─ Generate commit message
-    │           ├─ git commit (+ git push если разрешён проектом)
-    │           └─ Hook reminds about /techdebt
-    │
-    ├─ Unsure about approach? → /rethink
-    │
-    └─ Need to discuss? → follow protocol from /remind-protocol
-```
+`CLAUDE.md` is a template without a persona or a user name. Add your own: how the
+assistant should address you, your language, your project conventions. Per-project
+`CLAUDE.md` files override the global one, for example to allow or forbid pushing
+for a particular repository.
