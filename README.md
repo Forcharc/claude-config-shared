@@ -1,187 +1,186 @@
 # Claude Code Harness
 
-A shareable [Claude Code](https://claude.ai/code) setup: an orchestrator workflow
-that delegates work to sub-agents, with a code review loop at its center. It
-contains agents, skills (slash commands), rules, safety hooks, a status line and a
-sanitized settings example.
+Переносимая настройка [Claude Code](https://claude.ai/code): рабочий процесс
+с оркестратором, который делегирует работу субагентам, а в центре стоит цикл
+ревью кода. В наборе — агенты, скиллы (слэш-команды), правила, защитные хуки,
+строка статуса и очищенный пример настроек.
 
-> Note: `CLAUDE.md`, the rules, the agents and the skills are written in Russian
-> (the author's working language). The logic does not depend on the language;
-> translate the prompts if you prefer.
+> Примечание: `CLAUDE.md`, правила, агенты и скиллы написаны по-русски (рабочий
+> язык автора). Логика от языка не зависит; промпты можно перевести, если вам
+> удобнее другой язык.
 
-## What it is
+## Что это
 
-- The main session acts as an orchestrator: it classifies a task, researches,
-  plans, delegates implementation and review to agents, and checks the result.
-- Agents are narrow roles (researcher, planner, implementer, several reviewers, a
-  judge). They exchange data through files, not through the orchestrator's context.
-- Every commit goes through a review loop (`/review`) until it comes back clean.
-- Edits to tracked files happen in git worktrees; hooks enforce that.
+- Основная сессия работает как оркестратор: классифицирует задачу, исследует код,
+  планирует, делегирует реализацию и ревью агентам и проверяет результат.
+- Агенты — узкие роли (исследователь, планировщик, исполнитель, несколько
+  ревьюеров, судья). Данные они передают через файлы, а не через контекст оркестратора.
+- Каждый коммит проходит цикл ревью (`/review`), пока вердикт не станет чистым.
+- Правки отслеживаемых файлов делаются в git worktree; это обеспечивают хуки.
 
-## Quick start
+## Быстрый старт
 
-If `~/.claude` does not exist yet, just clone and create settings:
+Если `~/.claude` ещё нет, достаточно клонировать репозиторий и создать настройки:
 
 ```bash
 git clone https://github.com/Forcharc/claude-config-shared.git ~/.claude
-cp ~/.claude/settings.example.json ~/.claude/settings.json   # then edit it
+cp ~/.claude/settings.example.json ~/.claude/settings.json   # затем отредактируйте
 ```
 
-If `~/.claude` already exists (Claude Code creates it on first run), move it aside first.
+Если `~/.claude` уже существует (Claude Code создаёт его при первом запуске), сначала отодвиньте его.
 
-Moving `~/.claude` also moves your credentials, sessions and `projects/` into the
-backup: you will have to log in again, and the old session history stays in the
-backup directory.
+Вместе с `~/.claude` в резервную копию уйдут учётные данные, сессии и `projects/`:
+придётся войти заново, а история старых сессий останется в каталоге резервной копии.
 
 ```bash
 mv ~/.claude ~/.claude-backup
 git clone https://github.com/Forcharc/claude-config-shared.git ~/.claude
 
-# Copy your own settings and history back
+# Верните свои настройки и историю
 cp ~/.claude-backup/settings.json ~/.claude/ 2>/dev/null
 cp ~/.claude-backup/settings.local.json ~/.claude/ 2>/dev/null
 cp ~/.claude-backup/history.jsonl ~/.claude/ 2>/dev/null
 [ -f ~/.claude/settings.json ] || cp ~/.claude/settings.example.json ~/.claude/settings.json
 ```
 
-Restart Claude Code afterwards and edit `settings.json` to fit your setup.
+После этого перезапустите Claude Code и поправьте `settings.json` под себя.
 
-## Review loop
+## Цикл ревью
 
-`/review` is the main entry point. It starts the `review-runner` agent, which drives
-the whole loop:
+Главная точка входа — `/review`. Он запускает агента `review-runner`, который ведёт
+весь цикл:
 
 ```
 /review
   -> review-runner
-       -> reviewers in parallel
+       -> ревьюеры параллельно
           (logic, security, clean-code, efficiency, architecture, docs,
            plan-compliance, fresh-reader)
-       -> review-judge        verifies every finding against the code
-       -> implementer         fixes confirmed findings
-       -> fix commit
-       -> re-review, until the verdict is clean
+       -> review-judge        сверяет каждую находку с кодом
+       -> implementer         исправляет подтверждённые находки
+       -> fix-коммит
+       -> повторное ревью, пока вердикт не станет чистым
 ```
 
-- `mode=full` (default): findings are fixed and committed.
-- `mode=analysis-only`: someone else's code, no edits, no commits; only a verdict.
-- `/review-mr` reviews a GitLab merge request through `glab`, using the same loop in
-  `analysis-only` mode.
+- `mode=full` (по умолчанию): находки исправляются и коммитятся.
+- `mode=analysis-only`: чужой код, без правок и коммитов; только вердикт.
+- `/review-mr` ревьюит merge request в GitLab через `glab` тем же циклом в режиме
+  `analysis-only`.
 
-Minimal set if you only want the review loop: all of `agents/`, and
+Минимальный набор, если нужен только цикл ревью: весь каталог `agents/`, а также
 `skills/{review,agent-core-preamble,reviewer-findings-output,commit,techdebt,techdebt-init}`,
-plus `rules/workflow.md`, `rules/code-says-what-it-does.md` and `rules/repo-references.md`. These are the
-things the loop refers to: `/commit` (fix commits), `/techdebt` and `/techdebt-init`
-(the judge records confirmed debt), `/review-mr` (optional), and the three rule files
-(`workflow.md` is referenced by `/review` and `/commit`; `repo-references.md` is used by `docs-reviewer`).
+плюс `rules/workflow.md`, `rules/code-says-what-it-does.md` и `rules/repo-references.md`. Именно на
+это ссылается цикл: `/commit` (fix-коммиты), `/techdebt` и `/techdebt-init`
+(судья записывает подтверждённый техдолг), `/review-mr` (необязательно) и три файла
+правил (на `workflow.md` ссылаются `/review` и `/commit`; `repo-references.md` использует `docs-reviewer`).
 
-## Agents
+## Агенты
 
-All agents live in `agents/`. Most of them load the shared preambles
-`agent-core-preamble` and `reviewer-findings-output` through the `skills:` field of
-their frontmatter.
+Все агенты лежат в `agents/`. Большинство подгружает общие преамбулы
+`agent-core-preamble` и `reviewer-findings-output` через поле `skills:` во
+frontmatter.
 
-| Agent | Role |
+| Агент | Роль |
 |-------|------|
-| `review-runner` | Drives the review loop: picks reviewers, runs them, calls the judge, fixes, re-reviews |
-| `review-judge` | Verifies each reviewer finding against the code; confirms, defers as debt, or drops |
-| `logic-reviewer` | Bugs, edge cases, error handling, races |
-| `security-reviewer` | Secrets, sensitive data in logs, missing checks, unsafe input handling |
-| `clean-code-reviewer` | YAGNI, dead code, speculative abstractions, naming, duplication |
-| `efficiency-reviewer` | Redundant work, missed concurrency, leaks |
-| `architecture-reviewer` | Layering, dependencies, public API surface, breaking changes |
-| `docs-reviewer` | Docs that no longer match the code |
-| `plan-compliance-reviewer` | Compares a commit with the implementation plan |
-| `fresh-reader-reviewer` | Reads the final branch state without the plan and checks the shape of the code |
-| `plan-runner` | Drives plan creation and plan review |
-| `planner` | Writes a detailed implementation plan to a file |
-| `plan-factcheck-reviewer` | Checks the claims in a plan against the code |
-| `plan-standards-reviewer` | Checks a plan against project rules and established patterns |
-| `research-writer` | Researches the codebase and writes a report to a file |
-| `implementer` | Writes and edits code from a plan or task |
+| `review-runner` | Ведёт цикл ревью: выбирает ревьюеров, запускает их, зовёт судью, исправляет, ревьюит повторно |
+| `review-judge` | Сверяет каждую находку ревьюера с кодом; подтверждает, откладывает как техдолг или отбрасывает |
+| `logic-reviewer` | Баги, крайние случаи, обработка ошибок, гонки |
+| `security-reviewer` | Секреты, чувствительные данные в логах, отсутствующие проверки, небезопасная обработка ввода |
+| `clean-code-reviewer` | YAGNI, мёртвый код, умозрительные абстракции, именование, дублирование |
+| `efficiency-reviewer` | Лишняя работа, упущенная параллельность, утечки |
+| `architecture-reviewer` | Слои, зависимости, публичный API, обратно несовместимые изменения |
+| `docs-reviewer` | Документация, разошедшаяся с кодом |
+| `plan-compliance-reviewer` | Сверяет коммит с планом реализации |
+| `fresh-reader-reviewer` | Читает итоговое состояние ветки без плана и проверяет форму кода |
+| `plan-runner` | Ведёт составление и ревью плана |
+| `planner` | Пишет подробный план реализации в файл |
+| `plan-factcheck-reviewer` | Сверяет утверждения плана с кодом |
+| `plan-standards-reviewer` | Сверяет план с правилами проекта и устоявшимися паттернами |
+| `research-writer` | Исследует кодовую базу и пишет отчёт в файл |
+| `implementer` | Пишет и правит код по плану или задаче |
 
-## Skills
+## Скиллы
 
-Skills live in `skills/<name>/SKILL.md`.
+Скиллы лежат в `skills/<name>/SKILL.md`.
 
-| Skill | Purpose |
-|-------|---------|
-| `/review` | Starts the review loop |
-| `/review-mr` | Reviews a GitLab merge request through `glab` |
-| `/commit` | Stages, reviews and formats a commit; pushes only if the project opts in |
-| `/techdebt` | Records a tech debt item with an automatic number |
-| `/techdebt-init` | Creates the tech debt directory structure |
-| `/finalize` | Closes the session's tech debt, processes flow feedback and deferred threads |
-| `/fork-init` | Sets up a forked chat session with its own worktree |
-| `/txt` | Writes information to a text file and opens it for copying |
-| `agent-core-preamble` | Library for sub-agents: rules check, worktree check, flow feedback (loaded by agents, not called directly) |
-| `reviewer-findings-output` | Library for reviewers: how to write the findings file (loaded by reviewers, not called directly) |
+| Скилл | Назначение |
+|-------|------------|
+| `/review` | Запускает цикл ревью |
+| `/review-mr` | Ревьюит merge request в GitLab через `glab` |
+| `/commit` | Добавляет изменения в индекс git, ревьюит и оформляет коммит; пушит, только если проект это разрешил |
+| `/techdebt` | Записывает пункт техдолга с автоматическим номером |
+| `/techdebt-init` | Создаёт структуру каталогов для техдолга |
+| `/finalize` | Закрывает техдолг сессии, разбирает обратную связь по процессу и отложенные нити |
+| `/fork-init` | Настраивает форкнутую сессию чата с собственным worktree |
+| `/txt` | Записывает информацию в текстовый файл и открывает его, чтобы можно было скопировать |
+| `agent-core-preamble` | Библиотека для субагентов: проверка правил, проверка worktree, обратная связь по процессу (подгружается агентами, напрямую не вызывается) |
+| `reviewer-findings-output` | Библиотека для ревьюеров: как писать файл находок (подгружается ревьюерами, напрямую не вызывается) |
 
-## Rules
+## Правила
 
-Rules are in `rules/`. The first three apply to every session; the last two are
-scoped by `paths:` in their frontmatter.
+Правила лежат в `rules/`. Первые три действуют в каждой сессии; последние два
+ограничены полем `paths:` во frontmatter.
 
-| File | Content |
-|------|---------|
-| `workflow.md` | Orchestration through sub-agents, worktree isolation, delegation reference |
-| `protocol.md` | Communication protocol: numbered questions, options with a recommended one |
-| `repo-references.md` | What may and may not be referenced from texts committed to a repository |
-| `code-says-what-it-does.md` | Code shape must match production behavior; no test-only members |
-| `check-dependency-versions.md` | Check the current version before adding or bumping a dependency |
+| Файл | Содержание |
+|------|------------|
+| `workflow.md` | Оркестрация через субагентов, изоляция через worktree, справочник по делегированию |
+| `protocol.md` | Протокол общения: нумерованные вопросы, варианты с рекомендуемым |
+| `repo-references.md` | На что можно и нельзя ссылаться в текстах, которые коммитятся в репозиторий |
+| `code-says-what-it-does.md` | Форма кода должна соответствовать боевому поведению; в боевом коде нет членов, нужных только тестам |
+| `check-dependency-versions.md` | Перед добавлением или обновлением зависимости проверить актуальную версию |
 
-## Hooks and status line
+## Хуки и строка статуса
 
-| File | Purpose |
-|------|---------|
-| `hooks/worktree-boundary.sh` | `PreToolUse` on Write/Edit/MultiEdit/NotebookEdit: refuses writes into the main working tree of a git repository (git-ignored files and live merge conflicts excepted) |
-| `hooks/git-branch-guard.py` | `PreToolUse` on Bash: refuses `git checkout`, `switch`, `reset --hard` and `branch -f` in the main working tree |
-| `hooks/*.test.sh` | Test scripts for the two hooks |
-| `statusline.sh` | One-line status line: folder, model, context, monthly cost |
+| Файл | Назначение |
+|------|------------|
+| `hooks/worktree-boundary.sh` | `PreToolUse` на Write/Edit/MultiEdit/NotebookEdit: отказывает в записи в основное рабочее дерево git-репозитория (кроме файлов, игнорируемых git, и живых конфликтов слияния) |
+| `hooks/git-branch-guard.py` | `PreToolUse` на Bash: отказывает в `git checkout`, `switch`, `reset --hard` и `branch -f` в основном рабочем дереве |
+| `hooks/*.test.sh` | Тестовые скрипты для двух хуков |
+| `statusline.sh` | Строка статуса: папка, модель, контекст, стоимость за месяц |
 
-## Requirements
+## Требования
 
 - Claude Code
-- git and bash
-- `python3` (the `git-branch-guard.py` hook)
-- `jq` (`statusline.sh`, `skills/review/runner-wait.sh` - exits with an error without it; `worktree-boundary.sh` skips its checks without it)
-- `glab`, configured for your GitLab instance (only for `/review-mr`)
-- `ccusage`, run through `npx` (only for the monthly cost in the status line)
-- macOS: `statusline.sh` calls `stat -f`, the BSD form. On Linux, change those calls
-  to `stat -c`.
+- git и bash
+- `python3` (хук `git-branch-guard.py`)
+- `jq` (`statusline.sh`, `skills/review/runner-wait.sh` — без него завершается с ошибкой; `worktree-boundary.sh` без него пропускает свои проверки)
+- `glab`, настроенный на ваш экземпляр GitLab (только для `/review-mr`)
+- `ccusage`, запускаемый через `npx` (только для стоимости за месяц в строке статуса)
+- macOS: `statusline.sh` вызывает `stat -f`, то есть BSD-форму. В Linux замените эти
+  вызовы на `stat -c`.
 
-## Files created at runtime
+## Файлы, создаваемые при работе
 
-The harness writes these itself; they are not part of the repository.
+Эти файлы харнес пишет сам; в репозиторий они не входят.
 
-- `projects/<slug>/memory/agent-results/` - reports exchanged between agents
-- `projects/<slug>/memory/flow-feedback.md` - problems agents hit in the process itself
-- `projects/<slug>/memory/commit-sessions.md` - which session made which commit
-- `projects/<slug>/memory/session-threads.md` - ideas and questions deferred during a session
-- `.tmp/` in your working repositories - scratch files and logs
+- `projects/<slug>/memory/agent-results/` — отчёты, которыми обмениваются агенты
+- `projects/<slug>/memory/flow-feedback.md` — проблемы, с которыми агенты столкнулись в самом процессе
+- `projects/<slug>/memory/commit-sessions.md` — какая сессия сделала какой коммит
+- `projects/<slug>/memory/session-threads.md` — идеи и вопросы, отложенные в ходе сессии
+- `.tmp/` в ваших рабочих репозиториях — временные файлы и логи
 
-`<slug>` is the absolute path of `~/.claude` with every `/` and `.` replaced by `-`.
+`<slug>` — абсолютный путь к `~/.claude`, в котором каждый `/` и `.` заменён на `-`.
 
-## Settings example
+## Пример настроек
 
-`settings.example.json` is a minimal starting point for `settings.json`:
+`settings.example.json` — минимальная отправная точка для `settings.json`:
 
-- Two `PreToolUse` hooks: `worktree-boundary.sh` for file edits and
-  `git-branch-guard.py` for Bash. Together they keep tracked-file edits and branch
-  switches out of the main working tree.
-- `statusLine` points to `statusline.sh`.
-- `includeGitInstructions: false` drops Claude Code's built-in git instructions;
-  the git section of `CLAUDE.md` replaces them.
-- `defaultMode: default` keeps the normal permission prompts. The allow list is
-  short on purpose; add commands you trust. Only read-only git commands
-  (`status`, `diff`, `log`, `show`) are pre-approved; `push` and other git commands
-  that write still ask for confirmation. The form `git -C <path> ...` is not
-  covered by these rules and will ask too; add `Bash(git -C:*)` only on purpose,
-  because it also covers `push`.
+- Два хука `PreToolUse`: `worktree-boundary.sh` для правок файлов и
+  `git-branch-guard.py` для Bash. Вместе они не дают правкам отслеживаемых файлов и
+  переключению веток попасть в основное рабочее дерево.
+- `statusLine` указывает на `statusline.sh`.
+- `includeGitInstructions: false` отключает встроенные git-инструкции Claude Code;
+  их заменяет git-раздел `CLAUDE.md`.
+- `defaultMode: default` сохраняет обычные запросы разрешений. Список разрешённого
+  намеренно короткий; добавьте команды, которым доверяете. Заранее одобрены только
+  git-команды, которые лишь читают (`status`, `diff`, `log`, `show`); `push` и другие
+  git-команды, которые пишут, по-прежнему спрашивают подтверждение. Форма
+  `git -C <path> ...` этими правилами не покрыта и тоже будет спрашивать; добавляйте
+  `Bash(git -C:*)` только осознанно, потому что оно покрывает и `push`.
 
-## Customizing
+## Настройка под себя
 
-`CLAUDE.md` is a template without a persona or a user name. Add your own: how the
-assistant should address you, your language, your project conventions. Per-project
-`CLAUDE.md` files override the global one, for example to allow or forbid pushing
-for a particular repository.
+`CLAUDE.md` — шаблон без персоны и имени пользователя. Добавьте свои: как
+ассистенту обращаться к вам, ваш язык, соглашения ваших проектов. `CLAUDE.md`
+в отдельных проектах переопределяют глобальный, например чтобы разрешить или
+запретить push для конкретного репозитория.
